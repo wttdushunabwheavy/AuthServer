@@ -303,22 +303,23 @@ namespace
                 }
 
                 const char* values[] = {
-                    username.c_str(),
-                    passwordHash.c_str()
-                };
+     username.c_str(),
+     passwordHash.c_str(),
+     "1"
+ };
 
-                DbResult result(
-                    PQexecParams(
-                        db.get(),
-                        "INSERT INTO accounts (username, password_hash) "
-                        "VALUES ($1, $2) RETURNING id",
-                        2,
-                        nullptr,
-                        values,
-                        nullptr,
-                        nullptr,
-                        0),
-                    PQclear);
+ DbResult result(
+     PQexecParams(
+         db.get(),
+         "INSERT INTO accounts (username, password_hash, role_id) "
+         "VALUES ($1, $2, $3) RETURNING id",
+         3,
+         nullptr,
+         values,
+         nullptr,
+         nullptr,
+         0),
+     PQclear);
 
                 if (!result ||
                     PQresultStatus(result.get()) != PGRES_TUPLES_OK)
@@ -337,7 +338,23 @@ namespace
                         return;
                     }
 
-                    std::cerr << "Registration database error\n";
+                    std::cerr << "Registration database error";
+                    if (result)
+                    {
+                        const char* errorMessage = PQresultErrorMessage(result.get());
+                        const char* state = PQresultErrorField(
+                            result.get(), PG_DIAG_SQLSTATE);
+
+                        if (state)
+                            std::cerr << " [SQLSTATE " << state << "]";
+                        if (errorMessage && *errorMessage)
+                            std::cerr << ": " << errorMessage;
+                    }
+                    else
+                    {
+                        std::cerr << ": PQexecParams returned a null result";
+                    }
+                    std::cerr << std::endl;
 
                     callback(jsonError(
                         drogon::k500InternalServerError,
