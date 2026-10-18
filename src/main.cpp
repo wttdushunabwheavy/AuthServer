@@ -1,5 +1,4 @@
-﻿
-#include <drogon/drogon.h>
+﻿#include <drogon/drogon.h>
 #include <libpq-fe.h>
 #include <argon2.h>
 
@@ -7,6 +6,8 @@
 #include <bcrypt.h>
 
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <string>
 #include <array>
 #include <vector>
@@ -18,12 +19,51 @@
 
 namespace
 {
-    constexpr char DB_CONNECTION[] =
-        "host=localhost "
-        "port=5432 "
-        "dbname=authserver "
-        "user=postgres "
-        "password=1o2l3e4g88";
+    // Loaded once at startup from db_password.txt beside the executable.
+    std::string DB_PASSWORD;
+
+    std::filesystem::path executableDirectory()
+    {
+        std::wstring path(MAX_PATH, L'\0');
+        const DWORD length = GetModuleFileNameW(
+            nullptr, path.data(), static_cast<DWORD>(path.size()));
+
+        if (length == 0 || length >= path.size())
+            return std::filesystem::current_path();
+
+        path.resize(length);
+        return std::filesystem::path(path).parent_path();
+    }
+
+    bool loadDatabasePassword()
+    {
+        const auto passwordFile = executableDirectory() / L"db_password.txt";
+        std::ifstream file(passwordFile, std::ios::binary);
+
+        if (!file)
+        {
+            std::cerr << "Could not open db_password.txt beside the executable.\n";
+            return false;
+        }
+
+        if (!std::getline(file, DB_PASSWORD))
+        {
+            std::cerr << "Could not read db_password.txt.\n";
+            return false;
+        }
+
+        // Remove the carriage return if the file uses Windows CRLF line endings.
+        if (!DB_PASSWORD.empty() && DB_PASSWORD.back() == '\r')
+            DB_PASSWORD.pop_back();
+
+        if (DB_PASSWORD.empty())
+        {
+            std::cerr << "db_password.txt is empty.\n";
+            return false;
+        }
+
+        return true;
+    }
 
     constexpr std::size_t SALT_SIZE = 16;
     constexpr std::size_t HASH_SIZE = 32;
@@ -37,7 +77,16 @@ namespace
 
     DbConnection connectDatabase()
     {
-        return DbConnection(PQconnectdb(DB_CONNECTION), PQfinish);
+        const char* keywords[] = {
+            "host", "port", "dbname", "user", "password", nullptr
+        };
+        const char* values[] = {
+            "localhost", "5432", "authserver", "postgres",
+            DB_PASSWORD.c_str(), nullptr
+        };
+
+        return DbConnection(
+            PQconnectdbParams(keywords, values, 0), PQfinish);
     }
 
     drogon::HttpResponsePtr jsonError(
@@ -307,7 +356,7 @@ namespace
      passwordHash.c_str(),
      "1"
  };
-
+                
  DbResult result(
      PQexecParams(
          db.get(),
@@ -496,7 +545,7 @@ namespace
                         db.get(),
                         "INSERT INTO sessions "
                         "(account_id, token_hash, expires_at) "
-                        "VALUES ($1, $2, NOW() + INTERVAL '24 hours')",
+                        "VALUES ($1, $2, NOW() + INTERVAL '5 minutes')",
                         2,
                         nullptr,
                         sessionValues,
@@ -521,7 +570,7 @@ namespace
                 response["account_id"] =
                     static_cast<Json::Int64>(std::stoll(accountId));
                 response["access_token"] = token;
-                response["expires_in"] = 86400;
+                response["expires_in"] = 300;
 
                 callback(
                     drogon::HttpResponse::newHttpJsonResponse(response));
@@ -794,6 +843,9 @@ namespace
 
 int main()
 {
+    if (!loadDatabasePassword())
+        return 1;
+
     auto db = connectDatabase();
 
     if (!db || PQstatus(db.get()) != CONNECTION_OK)
@@ -817,3 +869,4 @@ int main()
 
     return 0;
 }
+
